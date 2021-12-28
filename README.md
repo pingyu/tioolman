@@ -1,79 +1,59 @@
-# TiCDC
+# TioolMan
 
-[![Build Status](https://github.com/pingcap/ticdc/actions/workflows/check_and_build.yaml/badge.svg?branch=master)](https://github.com/pingcap/ticdc/actions/workflows/check_and_build.yaml?query=event%3Apush+branch%3Amaster)
-[![codecov](https://codecov.io/gh/pingcap/ticdc/branch/master/graph/badge.svg)](https://codecov.io/gh/pingcap/ticdc)
-[![Coverage Status](https://coveralls.io/repos/github/pingcap/ticdc/badge.svg)](https://coveralls.io/github/pingcap/ticdc)
-[![LICENSE](https://img.shields.io/github/license/pingcap/ticdc.svg)](https://github.com/pingcap/ticdc/blob/master/LICENSE)
-[![Go Report Card](https://goreportcard.com/badge/github.com/pingcap/ticdc)](https://goreportcard.com/report/github.com/pingcap/ticdc)
+TiFlow [README](README-TiCDC.md)
 
-**TiCDC** is [TiDB](https://docs.pingcap.com/tidb/stable)'s change data capture framework. It supports replicating change data to various downstreams, including MySQL protocol-compatible databases, message queues via the open CDC protocol and other systems such as local file storage.
+## 项目介绍
 
-## Architecture
+本项目为 TiFlow（原 TiCDC）增加 Key-Range 粒度负载均衡的能力，以提高资源利用率、满足单表大速率写入、纯 Key-Value 等业务场景下 CDC 的需要。
 
-<img src="docs/media/cdc_architecture.svg?sanitize=true" alt="architecture" width="600"/>
+## 背景&动机
 
-See a detailed introduction to [the TiCDC architecture](https://docs.pingcap.com/tidb/stable/ticdc-overview#ticdc-architecture).
+TiFlow 目前以 table 为粒度进行任务调度和负载均衡。这个设计在以下场景中存在限制：
 
-## Documentation
+#### 1. 不同表之间写入速率差异大。在目前的粒度下，单表的 CDC 只能由 TiFlow 中单个线程（processor）进行处理，因此会导致 TiFlow 集群负载不均、资源浪费
+#### 2. 单表大速率写入。表粒度下，当变更数据量太大、同步延迟变长时，无法通过水平扩容提高处理能力（见 tiflow#1207）
+#### 3. 无法满足纯 Key-Value 业务场景。直接使用 TiKV 作为 Key-Value 存储的场景下，由于没有 table 概念，因此无法使用 TiFlow 实现 CDC
 
-- [English](https://docs.pingcap.com/tidb/stable/ticdc-overview)
-- [Chinese](https://docs.pingcap.com/zh/tidb/stable/ticdc-overview)
+因此，为了满足上述三个业务场景的需要，本项目为 TiFlow 增加 Key-Range 粒度的任务调度和负载均衡能力，帮助 TiDB、TiKV 进一步完善生态。
 
-## Blog
+需要注意的是，Key-Range 粒度调度会影响同表不同行在下游的存储顺序，可能破环 Snapshot Isolation。在使用时，需要注意这点。
 
-- [English](https://pingcap.com/blog/)
-- [Chinese](https://pingcap.com/blog-cn/)
+## 项目设计
 
-## Building
+### 1. Why Key Range
+Table 之下再进行数据分片，Key Range 是一个显而易见的粒度。事实上 TiDB 本身就是按照 Key Range 进行数据分片，因此 TiFlow 在这个粒度仍然可以很好的与 TiDB / TiKV 配合。
 
-To check the source code, run test cases and build binaries, you can simply run:
+### 2. Why NOT Region
+Region 本质上是 TiKV 按照负载均衡的需要划分 Key Range。TiFlow 不直接采用 Region 作为粒度，原因包括：
 
-```bash
-$ make
-$ make test
-```
+* Region 的划分同时考虑了存储容量、读写负载、高可用等因素，而 TiFlow 主要考虑写负载。因此按照 Region 的划分很可能不适合 TiFlow
+* Region 不稳定，如果采用 Region 与 task 对应，Region merge 会引起 task 失效、Region split 则导致 key range 出现空洞，将大大增加系统的复杂度
+但同时需要注意的是，因为 TiFlow 与 TiKV 之间的数据同步以 Region 为单位，获取一个 Region 的部分数据在现有实现下有资源浪费。因此 TiFlow 在进行数据切分的时候，应当尽可能在 Region 边界
 
-Note that TiCDC supports building with Go version `Go >= 1.16`.
+### 3. 调度
+基于 1 和 2，调度模块应当统计各个 Region 的变更数据量，并根据资源数量，在 Region 边界均衡划分
+同时，在每个调度周期，重新获取 Region 分布，结合变更数据量统计调整调度
+当出现 Region 变化时：
+* Region Split：不影响任务调度
+* Region Merge：如果导致捕获 Region 的部分数据，在适当的时机调整任务调度
+此外，由于存在 table 粒度的 Metrics，因此 Key Range 的划分应当考虑在 table 边界（可能与 Region 边界冲突。可以暂时优先满足 table 边界，以降低实现复杂度）
 
-When TiCDC is built successfully, you can find binary in the `bin` directory. Instructions for unit test and integration test can be found in [Running tests](tests/README.md).
+### 4. 其他模块的调整
 
-## Deployment
+#### 4.1 Owner
+根据调度算法生成 Key Range Task
+根据 Key Range 收集并汇总 table 粒度的 Metrics
 
-You can setup a CDC cluster for replication test manually as following:
+#### 4.2 Capture
+接收 Key Range Task 并拉起 Processor
 
-1. Setup a TiDB cluster.
-2. Start a CDC cluster, which contains one or more CDC servers. The command to start on CDC server is `cdc server --pd http://10.0.10.25:2379`, where `http://10.0.10.25:2379` is the client-url of pd-server.
-3. Start a replication changefeed by `cdc cli changefeed create --pd http://10.0.10.25:2379 --start-ts 413105904441098240 --sink-uri mysql://root:123456@127.0.0.1:3306/`. The TSO is TiDB `timestamp oracle`. If it is not provided or set to zero, the TSO of start time will be used. Currently, we support MySQL protocol-compatible databases as downstream sinks only, and will add more sink types in the future.
+#### 4.3 Processor
+处理 Key Range Task
+processor.addTable 需要修改
 
-For details, see [Deploy TiCDC](https://docs.pingcap.com/tidb/stable/deploy-ticdc).
+#### 4.4 Puller
+暂无
 
-## Quick start
+#### 4.5 Sink
+bufferSink 以 tableID 作为缓存粒度，需要修改
 
-```sh
-# Start TiDB cluster
-$ docker-compose -f docker-compose-mysql.yml up -d
-
-# Attach to control container to run TiCDC
-$ docker exec -it ticdc_controller_1 sh
-
-# Start to feed the changes on the upstream tidb, and sink to the downstream tidb
-$ ./cdc cli changefeed create --pd http://upstream-pd:2379 --sink-uri mysql://root@downstream-tidb:4000/
-
-# Exit the control container
-$ exit
-
-# Load data to the upstream tidb
-$ sysbench --mysql-host=127.0.0.1 --mysql-user=root --mysql-port=4000 --mysql-db=test oltp_insert --tables=1 --table-size=100000 prepare
-
-# Check sync progress
-$ mysql -h 127.0.0.1 -P 5000 -u root -e "SELECT COUNT(*) FROM test.sbtest1"
-```
-
-## Contributing
-
-Contributions are welcomed and greatly appreciated. See [CONTRIBUTING.md](./CONTRIBUTING.md)
-for details on submitting patches and the contribution workflow.
-
-## License
-
-TiCDC is under the Apache 2.0 license. See the [LICENSE](./LICENSE) file for details.
