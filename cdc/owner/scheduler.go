@@ -408,10 +408,10 @@ func (s *scheduler) rebalanceByRegionNum(ctx cdcContext.Context) (shouldUpdateSt
 		tableID := tableID
 		regions, _ := GetRegionsByTableID(context.Background(), tableID, pdClient)
 		tableSpan := regionspan.GetTableSpan(tableID)
-		capture2Sapn := s.divideRegionsByCaptureNum(regions, tableSpan)
+		capture2Span := s.divideRegionsByCaptureNum(regions, tableSpan)
 
 		for captureID, taskStatus := range s.state.TaskStatuses {
-			if span, exist := capture2Sapn[captureID]; exist {
+			if span, exist := capture2Span[captureID]; exist {
 				taskStatus.Tables[tableID].Span = span
 				shouldUpdateState = false
 			} else {
