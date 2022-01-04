@@ -196,13 +196,13 @@ func (p *pullerImpl) Run(ctx context.Context) error {
 				}
 			} else if e.Resolved != nil {
 				metricTxnCollectCounterResolved.Inc()
-				if !regionspan.IsSubSpan(e.Resolved.Span, p.spans...) {
-					log.Panic("the resolved span is not in the total span",
-						zap.Reflect("resolved", e.Resolved),
-						zap.Int64("tableID", tableID),
-						zap.Reflect("spans", p.spans),
-					)
-				}
+				//if !regionspan.IsSubSpan(e.Resolved.Span, p.spans...) {
+				//	log.Panic("the resolved span is not in the total span",
+				//		zap.Reflect("resolved", e.Resolved),
+				//		zap.Int64("tableID", tableID),
+				//		zap.Reflect("spans", p.spans),
+				//	)
+				//}
 				// Forward is called in a single thread
 				p.tsTracker.Forward(e.Resolved.Span, e.Resolved.ResolvedTs)
 				resolvedTs := p.tsTracker.Frontier()

@@ -14,6 +14,7 @@
 package owner
 
 import (
+	"bytes"
 	"context"
 	cdcContext "github.com/pingcap/ticdc/pkg/context"
 	"github.com/pingcap/ticdc/pkg/regionspan"
@@ -325,7 +326,8 @@ func (s *scheduler) rebalance(ctx cdcContext.Context) (shouldUpdateState bool) {
 		return true
 	}
 	// we only support rebalance by table number for now
-	return s.rebalanceByTableNum()
+	//return s.rebalanceByTableNum()
+	return s.rebalanceByRegionNum(ctx)
 }
 
 func (s *scheduler) shouldRebalance() bool {
@@ -339,7 +341,7 @@ func (s *scheduler) shouldRebalance() bool {
 		return true
 	}
 	// TODO periodic trigger rebalance
-	return false
+	return true
 }
 
 // rebalanceByTableNum removes tables from captures replicating an above-average number of tables.
@@ -409,12 +411,24 @@ func (s *scheduler) rebalanceByRegionNum(ctx cdcContext.Context) (shouldUpdateSt
 		regions, _ := GetRegionsByTableID(context.Background(), tableID, pdClient)
 		tableSpan := regionspan.GetTableSpan(tableID)
 		capture2Span := s.divideRegionsByCaptureNum(regions, tableSpan)
+		globalCheckpointTs := s.state.Status.CheckpointTs
 
 		for captureID, taskStatus := range s.state.TaskStatuses {
 			if span, exist := capture2Span[captureID]; exist {
-				taskStatus.Tables[tableID].Span = span
-				shouldUpdateState = false
-			} else {
+				if taskStatus.Tables == nil {
+					taskStatus.Tables = make(map[model.TableID]*model.TableReplicaInfo)
+				}
+				if taskStatus.Tables[tableID] != nil &&
+					bytes.Equal(span.Start, taskStatus.Tables[tableID].Span.Start) &&
+					bytes.Equal(span.End, taskStatus.Tables[tableID].Span.End) {
+					shouldUpdateState = false
+					continue
+				}
+				taskStatus.Tables[tableID] = &model.TableReplicaInfo{
+					Span:    span,
+					StartTs: globalCheckpointTs,
+				}
+			} else if _, ok := taskStatus.Tables[tableID]; ok {
 				// if cpature not allocate span, remove this table
 				s.state.PatchTaskStatus(captureID, func(status *model.TaskStatus) (*model.TaskStatus, bool, error) {
 					if status == nil {
@@ -457,6 +471,11 @@ func (s *scheduler) divideRegionsByCaptureNum(
 	captureNum := len(s.captures)
 	capture2Spane := make(map[model.CaptureID]regionspan.ComparableSpan)
 	upperLimitPerCapture := int(math.Ceil(float64(regionNum) / float64(captureNum)))
+
+	log.Info("divide regions to captures",
+		zap.Int("region num", regionNum),
+		zap.Int("capture num", captureNum),
+	)
 	var start, end []byte
 
 	regionIdx := 0
@@ -472,7 +491,7 @@ func (s *scheduler) divideRegionsByCaptureNum(
 		} else {
 			start = regions[regionIdx].StartKey()
 		}
-		if regionIdx >= regionNum {
+		if nextIdx >= regionNum {
 			end = tableSpan.End
 		} else {
 			end = regions[nextIdx].StartKey()
