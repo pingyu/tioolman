@@ -72,6 +72,7 @@ type ownerJob struct {
 type Owner struct {
 	changefeeds map[model.ChangeFeedID]*changefeed
 	captures    map[model.CaptureID]*model.CaptureInfo
+	cancel      context.CancelFunc
 
 	gcManager gc.Manager
 
@@ -87,12 +88,29 @@ type Owner struct {
 
 // NewOwner creates a new Owner
 func NewOwner(pdClient pd.Client) *Owner {
-	return &Owner{
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	owner := &Owner{
 		changefeeds:   make(map[model.ChangeFeedID]*changefeed),
 		gcManager:     gc.NewManager(pdClient),
 		lastTickTime:  time.Now(),
 		newChangefeed: newChangefeed,
+		cancel:        cancel,
 	}
+	go func() {
+		tickTimer := time.NewTicker(5 * time.Minute)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tickTimer.C:
+				for changefeedId, _ := range owner.changefeeds {
+					owner.TriggerRebalance(changefeedId)
+				}
+			}
+		}
+	}()
+	return owner
 }
 
 // NewOwner4Test creates a new Owner for test

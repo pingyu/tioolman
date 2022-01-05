@@ -65,7 +65,8 @@ type scheduler struct {
 
 func newScheduler() *scheduler {
 	return &scheduler{
-		moveTableTargets: make(map[model.TableID]model.CaptureID),
+		moveTableTargets:      make(map[model.TableID]model.CaptureID),
+		needRebalanceNextTick: true,
 	}
 }
 
@@ -341,7 +342,7 @@ func (s *scheduler) shouldRebalance() bool {
 		return true
 	}
 	// TODO periodic trigger rebalance
-	return true
+	return false
 }
 
 // rebalanceByTableNum removes tables from captures replicating an above-average number of tables.
