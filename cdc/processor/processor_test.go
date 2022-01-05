@@ -192,7 +192,7 @@ func (s *processorSuite) TestHandleTableOperation4SingleTable(c *check.C) {
 		status.ResolvedTs = 100
 		return status, true, nil
 	})
-	p.changefeed.PatchTaskPosition(p.captureInfo.ID, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+	p.changefeed.PatchTaskPosition(p.captureInfo.ID, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 		position.ResolvedTs = 100
 		return position, true, nil
 	})
@@ -325,7 +325,7 @@ func (s *processorSuite) TestHandleTableOperation4MultiTable(c *check.C) {
 		status.ResolvedTs = 20
 		return status, true, nil
 	})
-	p.changefeed.PatchTaskPosition(p.captureInfo.ID, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+	p.changefeed.PatchTaskPosition(p.captureInfo.ID, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 		position.ResolvedTs = 100
 		position.CheckPointTs = 90
 		return position, true, nil
@@ -679,7 +679,7 @@ func (s *processorSuite) TestPositionDeleted(c *check.C) {
 	})
 
 	// some other delete the task position
-	p.changefeed.PatchTaskPosition(p.captureInfo.ID, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+	p.changefeed.PatchTaskPosition(p.captureInfo.ID, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 		return nil, true, nil
 	})
 	tester.MustApplyPatches()

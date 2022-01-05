@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/cdc/model"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
+	"github.com/pingcap/ticdc/pkg/regionspan"
 	"go.uber.org/zap"
 )
 
@@ -39,6 +40,8 @@ type schedulerJob struct {
 	// if the operation is an add operation, boundaryTs is start ts
 	BoundaryTs    uint64
 	TargetCapture model.CaptureID
+
+	Span regionspan.Span
 }
 
 type moveTableJob struct {
@@ -76,6 +79,7 @@ func (s *scheduler) Tick(state *orchestrator.ChangefeedReactorState, currentTabl
 	if err != nil {
 		return false, errors.Trace(err)
 	}
+	pendingJob = s.splitPendingJobsToKeySpans(pendingJob)
 	s.dispatchToTargetCaptures(pendingJob)
 	if len(pendingJob) != 0 {
 		log.Debug("scheduler:generated pending job to be executed", zap.Any("pendingJob", pendingJob))
@@ -159,6 +163,15 @@ func (s *scheduler) table2CaptureIndex() (map[model.TableID]model.CaptureID, err
 			table2CaptureIndex[tableID] = captureID
 		}
 	}
+
+	for captureID, taskStatus := range s.state.TaskStatuses {
+		for _, replica := range taskStatus.KeySpans {
+			table2CaptureIndex[replica.TableID] = captureID // Note a table will be owned by multiple cature
+		}
+		for _, oper := range taskStatus.KeySpanOperation {
+			table2CaptureIndex[oper.TableID] = captureID
+		}
+	}
 	return table2CaptureIndex, nil
 }
 
@@ -166,6 +179,7 @@ func (s *scheduler) table2CaptureIndex() (map[model.TableID]model.CaptureID, err
 // If the TargetCapture of a job is not set, it chooses a capture with the minimum workload(minimum number of tables)
 // and sets the TargetCapture to the capture.
 func (s *scheduler) dispatchToTargetCaptures(pendingJobs []*schedulerJob) {
+	// TODO(tiool): workload for key spans
 	workloads := make(map[model.CaptureID]uint64)
 
 	for captureID := range s.captures {
@@ -226,6 +240,24 @@ func (s *scheduler) dispatchToTargetCaptures(pendingJobs []*schedulerJob) {
 	}
 }
 
+func (s *scheduler) splitPendingJobsToKeySpans(pendingJobs []*schedulerJob) []*schedulerJob {
+	// TODO(tiool): real scheduler algorithm
+	newJobs := make([]*schedulerJob, 0, len(pendingJobs))
+	for _, job := range pendingJobs {
+		if job.Tp == schedulerJobTypeAddTable {
+			newJobs = append(newJobs, &schedulerJob{
+				Tp:         job.Tp,
+				TableID:    job.TableID,
+				BoundaryTs: job.BoundaryTs,
+				Span:       regionspan.GetTableSpan(job.TableID),
+			})
+		} else {
+			newJobs = append(newJobs, job) // TODO(tiool): delete table job
+		}
+	}
+	return newJobs
+}
+
 // syncTablesWithCurrentTables iterates all current tables to check whether it should be listened or not.
 // this function will return schedulerJob to make sure all tables will be listened.
 func (s *scheduler) syncTablesWithCurrentTables() ([]*schedulerJob, error) {
@@ -280,6 +312,13 @@ func (s *scheduler) handleJobs(jobs []*schedulerJob) {
 					StartTs:     job.BoundaryTs,
 					MarkTableID: 0, // mark table ID will be set in processors
 				}, job.BoundaryTs)
+				status.AddKeySpan(job.Span, &model.TableReplicaInfo{
+					StartTs:     job.BoundaryTs,
+					MarkTableID: 0,
+					TableID:     job.TableID,
+					SpanStart:   job.Span.Start,
+					SpanEnd:     job.Span.End,
+				}, job.BoundaryTs)
 			case schedulerJobTypeRemoveTable:
 				failpoint.Inject("OwnerRemoveTableError", func() {
 					// just skip removing this table
@@ -290,6 +329,7 @@ func (s *scheduler) handleJobs(jobs []*schedulerJob) {
 					return status, false, nil
 				}
 				status.RemoveTable(job.TableID, job.BoundaryTs, false)
+				// TODO(tiool): remove table
 			default:
 				log.Panic("Unreachable, please report a bug", zap.Any("job", job))
 			}
