@@ -26,6 +26,7 @@ import (
 	cdcContext "github.com/pingcap/ticdc/pkg/context"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pipeline"
+	"github.com/pingcap/ticdc/pkg/regionspan"
 	"go.uber.org/zap"
 )
 
@@ -63,6 +64,7 @@ type tablePipelineImpl struct {
 	p *pipeline.Pipeline
 
 	tableID     int64
+	spanID      model.KeySpanHash
 	markTableID int64
 	tableName   string // quoted schema and table, used in metircs only
 
@@ -190,11 +192,29 @@ func NewTablePipeline(ctx cdcContext.Context,
 		replConfig:  ctx.ChangefeedVars().Info.Config,
 	}
 
+	return tablePipeline
+}
+
+// NewSpanPipeline creates a span pipeline
+func NewSpanPipeline(ctx cdcContext.Context,
+	mounter entry.Mounter,
+	span regionspan.Span,
+	spanID model.KeySpanHash,
+	replicaInfo *model.TableReplicaInfo,
+	sink sink.Sink,
+	targetTs model.Ts) TablePipeline {
+	ctx, cancel := cdcContext.WithCancel(ctx)
+	tablePipeline := &tablePipelineImpl{
+		spanID:      spanID,
+		markTableID: replicaInfo.MarkTableID,
+		cancel:      cancel,
+		replConfig:  ctx.ChangefeedVars().Info.Config,
+	}
+
 	perTableMemoryQuota := serverConfig.GetGlobalServerConfig().PerTableMemoryQuota
 	log.Debug("creating table flow controller",
 		zap.String("changefeed-id", ctx.ChangefeedVars().ID),
-		zap.String("table-name", tableName),
-		zap.Int64("table-id", tableID),
+		zap.Uint64("span-id", spanID),
 		zap.Uint64("quota", perTableMemoryQuota))
 	flowController := common.NewTableFlowController(perTableMemoryQuota)
 	config := ctx.ChangefeedVars().Info.Config
@@ -205,10 +225,10 @@ func NewTablePipeline(ctx cdcContext.Context,
 	}
 
 	p := pipeline.NewPipeline(ctx, 500*time.Millisecond, runnerSize, defaultOutputChannelSize)
-	sorterNode := newSorterNode(tableName, tableID, replicaInfo.StartTs, flowController, mounter)
+	sorterNode := newSorterNode(spanID, replicaInfo.StartTs, flowController, mounter)
 	sinkNode := newSinkNode(sink, replicaInfo.StartTs, targetTs, flowController)
 
-	p.AppendNode(ctx, "puller", newPullerNode(tableID, replicaInfo, tableName))
+	p.AppendNode(ctx, "puller", newPullerNode(span, spanID, replicaInfo))
 	p.AppendNode(ctx, "sorter", sorterNode)
 	p.AppendNode(ctx, "mounter", newMounterNode())
 	if cyclicEnabled {

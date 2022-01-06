@@ -30,18 +30,19 @@ import (
 type pullerNode struct {
 	tableName string // quoted schema and table, used in metircs only
 
-	tableID     model.TableID
+	spanID      model.KeySpanHash
+	span        regionspan.Span
 	replicaInfo *model.TableReplicaInfo
 	cancel      context.CancelFunc
 	wg          errgroup.Group
 }
 
 func newPullerNode(
-	tableID model.TableID, replicaInfo *model.TableReplicaInfo, tableName string) pipeline.Node {
+	span regionspan.Span, spanID model.KeySpanHash, replicaInfo *model.TableReplicaInfo) pipeline.Node {
 	return &pullerNode{
-		tableID:     tableID,
+		span:        span,
+		spanID:      spanID,
 		replicaInfo: replicaInfo,
-		tableName:   tableName,
 	}
 }
 
@@ -49,7 +50,7 @@ func (n *pullerNode) tableSpan(ctx cdcContext.Context) []regionspan.Span {
 	// start table puller
 	config := ctx.ChangefeedVars().Info.Config
 	spans := make([]regionspan.Span, 0, 4)
-	spans = append(spans, regionspan.GetTableSpan(n.tableID))
+	spans = append(spans, n.span)
 
 	if config.Cyclic.IsEnabled() && n.replicaInfo.MarkTableID != 0 {
 		spans = append(spans, regionspan.GetTableSpan(n.replicaInfo.MarkTableID))
@@ -60,7 +61,7 @@ func (n *pullerNode) tableSpan(ctx cdcContext.Context) []regionspan.Span {
 func (n *pullerNode) Init(ctx pipeline.NodeContext) error {
 	metricTableResolvedTsGauge := tableResolvedTsGauge.WithLabelValues(ctx.ChangefeedVars().ID, ctx.GlobalVars().CaptureInfo.AdvertiseAddr, n.tableName)
 	ctxC, cancel := context.WithCancel(ctx)
-	ctxC = util.PutTableInfoInCtx(ctxC, n.tableID, n.tableName)
+	ctxC = util.PutTableInfoInCtx(ctxC, int64(n.spanID), n.tableName)
 	ctxC = util.PutCaptureAddrInCtx(ctxC, ctx.GlobalVars().CaptureInfo.AdvertiseAddr)
 	ctxC = util.PutChangefeedIDInCtx(ctxC, ctx.ChangefeedVars().ID)
 	// NOTICE: always pull the old value internally

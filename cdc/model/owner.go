@@ -371,6 +371,9 @@ type ChangeFeedID = string
 // TableID is the ID of the table
 type TableID = int64
 
+// KeySpanHash is the hash of the key span
+type KeySpanHash = uint64
+
 // SchemaID is the ID of the schema
 type SchemaID = int64
 

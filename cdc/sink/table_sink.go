@@ -26,6 +26,7 @@ import (
 )
 
 type tableSink struct {
+	spanID  model.KeySpanHash
 	tableID model.TableID
 	manager *Manager
 	buffer  []*model.RowChangedEvent
@@ -43,7 +44,8 @@ func (t *tableSink) EmitRowChangedEvents(ctx context.Context, rows ...*model.Row
 	t.buffer = append(t.buffer, rows...)
 	t.manager.metricsTableSinkTotalRows.Add(float64(len(rows)))
 	if t.redoManager.Enabled() {
-		return t.redoManager.EmitRowChangedEvents(ctx, t.tableID, rows...)
+		// return t.redoManager.EmitRowChangedEvents(ctx, t.tableID, rows...)
+		// TODO(tiool)
 	}
 	return nil
 }
@@ -62,7 +64,7 @@ func (t *tableSink) FlushRowChangedEvents(ctx context.Context, resolvedTs uint64
 		if ckpt > resolvedTs {
 			log.L().WithOptions(zap.AddCallerSkip(1)).
 				Warn("checkpoint ts > resolved ts, flushed more than emitted",
-					zap.Int64("tableID", t.tableID),
+					zap.Uint64("spanID", t.spanID),
 					zap.Uint64("resolvedTs", resolvedTs),
 					zap.Uint64("checkpointTs", ckpt))
 		}
@@ -105,10 +107,13 @@ func (t *tableSink) FlushRowChangedEvents(ctx context.Context, resolvedTs uint64
 
 func (t *tableSink) flushRedoLogs(ctx context.Context, resolvedTs uint64) (uint64, error) {
 	if t.redoManager.Enabled() {
-		err := t.redoManager.FlushLog(ctx, t.tableID, resolvedTs)
-		if err != nil {
-			return t.manager.getCheckpointTs(), err
-		}
+		// TODO(tiool)
+		/*
+			err := t.redoManager.FlushLog(ctx, t.tableID, resolvedTs)
+			if err != nil {
+				return t.manager.getCheckpointTs(), err
+			}
+		*/
 	}
 	return 0, nil
 }
@@ -118,12 +123,15 @@ func (t *tableSink) flushRedoLogs(ctx context.Context, resolvedTs uint64) (uint6
 // before resolved ts have been persisted to redo log storage.
 func (t *tableSink) getResolvedTs() uint64 {
 	ts := atomic.LoadUint64(&t.emittedTs)
-	if t.redoManager.Enabled() {
-		redoResolvedTs := t.redoManager.GetMinResolvedTs()
-		if redoResolvedTs < ts {
-			ts = redoResolvedTs
+	// TODO(tiool)
+	/*
+		if t.redoManager.Enabled() {
+			redoResolvedTs := t.redoManager.GetMinResolvedTs()
+			if redoResolvedTs < ts {
+				ts = redoResolvedTs
+			}
 		}
-	}
+	*/
 	return ts
 }
 
@@ -134,7 +142,7 @@ func (t *tableSink) EmitCheckpointTs(ctx context.Context, ts uint64) error {
 
 // Note once the Close is called, no more events can be written to this table sink
 func (t *tableSink) Close(ctx context.Context) error {
-	return t.manager.destroyTableSink(ctx, t.tableID)
+	return t.manager.destroyTableSink(ctx, t.spanID)
 }
 
 // Barrier is not used in table sink

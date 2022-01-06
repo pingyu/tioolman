@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/util/codec"
+	"github.com/spaolacci/murmur3"
 	"go.uber.org/zap"
 )
 
@@ -35,6 +36,18 @@ type Span struct {
 // String returns a string that encodes Span in hex format.
 func (s Span) String() string {
 	return fmt.Sprintf("[%s, %s)", hex.EncodeToString(s.Start), hex.EncodeToString(s.End))
+}
+
+// HASH_SEP ...
+var HASH_SEP = []byte{0x0}
+
+// Hash return spanID
+func (s Span) Hash() uint64 {
+	hasher := murmur3.New64()
+	hasher.Write(s.Start)
+	hasher.Write(HASH_SEP)
+	hasher.Write(s.End)
+	return hasher.Sum64()
 }
 
 // UpperBoundKey represents the maximum value.

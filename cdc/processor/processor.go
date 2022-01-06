@@ -57,6 +57,7 @@ type processor struct {
 	changefeed   *orchestrator.ChangefeedReactorState
 
 	tables map[model.TableID]tablepipeline.TablePipeline
+	spans  map[model.KeySpanHash]tablepipeline.TablePipeline
 
 	schemaStorage entry.SchemaStorage
 	lastSchemaTs  model.Ts
@@ -669,6 +670,34 @@ func (p *processor) addTable(ctx cdcContext.Context, tableID model.TableID, repl
 	return nil
 }
 
+func (p *processor) addKeySpan(ctx cdcContext.Context, span regionspan.Span, spanID model.KeySpanHash, replicaInfo *model.TableReplicaInfo) error {
+	if span, ok := p.spans[spanID]; ok {
+		if span.Status() == tablepipeline.TableStatusStopped {
+			p.removeSpan(span, spanID)
+		} else {
+			log.Warn("Ignore existing span", cdcContext.ZapFieldChangefeed(ctx), zap.Uint64("ID", spanID))
+			return nil
+		}
+	}
+
+	globalCheckpointTs := p.changefeed.Status.CheckpointTs
+
+	if replicaInfo.StartTs < globalCheckpointTs {
+		log.Warn("addTable: startTs < checkpoint",
+			cdcContext.ZapFieldChangefeed(ctx),
+			zap.Uint64("spanID", spanID),
+			zap.Uint64("checkpoint", globalCheckpointTs),
+			zap.Uint64("startTs", replicaInfo.StartTs))
+	}
+
+	spanPipe, err := p.createSpanPipelineImpl(ctx, span, spanID, replicaInfo)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	p.spans[spanID] = spanPipe
+	return nil
+}
+
 func (p *processor) createTablePipelineImpl(ctx cdcContext.Context, tableID model.TableID, replicaInfo *model.TableReplicaInfo) (tablepipeline.TablePipeline, error) {
 	ctx = cdcContext.WithErrorHandler(ctx, func(err error) error {
 		if cerror.ErrTableProcessorStoppedSafely.Equal(err) ||
@@ -753,12 +782,67 @@ func (p *processor) createTablePipelineImpl(ctx cdcContext.Context, tableID mode
 	return table, nil
 }
 
+func (p *processor) createSpanPipelineImpl(ctx cdcContext.Context, span regionspan.Span, spanID model.KeySpanHash, replicaInfo *model.TableReplicaInfo) (tablepipeline.TablePipeline, error) {
+	ctx = cdcContext.WithErrorHandler(ctx, func(err error) error {
+		if cerror.ErrTableProcessorStoppedSafely.Equal(err) ||
+			errors.Cause(errors.Cause(err)) == context.Canceled {
+			return nil
+		}
+		p.sendError(err)
+		return nil
+	})
+
+	sink := p.sinkManager.CreateSpanSink(spanID, replicaInfo.StartTs, p.redoManager)
+	spanPipe := tablepipeline.NewSpanPipeline(
+		ctx,
+		p.mounter,
+		span,
+		spanID,
+		replicaInfo,
+		sink,
+		p.changefeed.Info.GetTargetTs(),
+	)
+	p.wg.Add(1)
+	p.metricSyncTableNumGauge.Inc()
+	go func() {
+		spanPipe.Wait()
+		p.wg.Done()
+		p.metricSyncTableNumGauge.Dec()
+		log.Debug("Table pipeline exited", zap.Uint64("spanID", spanID),
+			cdcContext.ZapFieldChangefeed(ctx),
+			zap.Any("replicaInfo", replicaInfo))
+	}()
+
+	// TODO(tiool)
+	/*
+		if p.redoManager.Enabled() {
+			p.redoManager.AddTable(tableID, replicaInfo.StartTs)
+		}
+	*/
+
+	log.Info("Add table pipeline", zap.Uint64("spanID", spanID),
+		cdcContext.ZapFieldChangefeed(ctx),
+		zap.Any("replicaInfo", replicaInfo),
+		zap.Uint64("globalResolvedTs", p.changefeed.Status.ResolvedTs))
+
+	return spanPipe, nil
+}
+
 func (p *processor) removeTable(table tablepipeline.TablePipeline, tableID model.TableID) {
 	table.Cancel()
 	table.Wait()
 	delete(p.tables, tableID)
 	if p.redoManager.Enabled() {
 		p.redoManager.RemoveTable(tableID)
+	}
+}
+
+func (p *processor) removeSpan(span tablepipeline.TablePipeline, hash model.KeySpanHash) {
+	span.Cancel()
+	span.Wait()
+	delete(p.spans, hash)
+	if p.redoManager.Enabled() {
+		// TODO(tiool)
 	}
 }
 
