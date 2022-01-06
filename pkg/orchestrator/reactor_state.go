@@ -120,15 +120,18 @@ type ChangefeedReactorState struct {
 
 	pendingPatches        []DataPatch
 	skipPatchesInThisTick bool
+
+	KeySpanTaskPositions map[model.CaptureID]map[model.KeySpanHash]*model.TaskPosition
 }
 
 // NewChangefeedReactorState creates a new changefeed reactor state
 func NewChangefeedReactorState(id model.ChangeFeedID) *ChangefeedReactorState {
 	return &ChangefeedReactorState{
-		ID:            id,
-		TaskPositions: make(map[model.CaptureID]*model.TaskPosition),
-		TaskStatuses:  make(map[model.CaptureID]*model.TaskStatus),
-		Workloads:     make(map[model.CaptureID]model.TaskWorkload),
+		ID:                   id,
+		TaskPositions:        make(map[model.CaptureID]*model.TaskPosition),
+		TaskStatuses:         make(map[model.CaptureID]*model.TaskStatus),
+		Workloads:            make(map[model.CaptureID]model.TaskWorkload),
+		KeySpanTaskPositions: make(map[model.CaptureID]map[model.KeySpanHash]*model.TaskPosition),
 	}
 }
 
@@ -178,7 +181,14 @@ func (s *ChangefeedReactorState) UpdateCDCKey(key *etcd.CDCKey, value []byte) er
 			return nil
 		}
 		position := new(model.TaskPosition)
-		s.TaskPositions[key.CaptureID] = position
+		if key.KeySpanHash == 0 {
+			s.TaskPositions[key.CaptureID] = position
+		} else {
+			if s.KeySpanTaskPositions[key.CaptureID] == nil {
+				s.KeySpanTaskPositions[key.CaptureID] = make(map[model.KeySpanHash]*model.TaskPosition)
+			}
+			s.KeySpanTaskPositions[key.CaptureID][key.KeySpanHash] = position
+		}
 		e = position
 	case etcd.CDCKeyTypeTaskStatus:
 		if key.ChangefeedID != s.ID {
@@ -315,11 +325,12 @@ func (s *ChangefeedReactorState) PatchStatus(fn func(*model.ChangeFeedStatus) (*
 }
 
 // PatchTaskPosition appends a DataPatch which can modify the TaskPosition of a specified capture
-func (s *ChangefeedReactorState) PatchTaskPosition(captureID model.CaptureID, fn func(*model.TaskPosition) (*model.TaskPosition, bool, error)) {
+func (s *ChangefeedReactorState) PatchTaskPosition(captureID model.CaptureID, keySpahHash uint64, fn func(*model.TaskPosition) (*model.TaskPosition, bool, error)) {
 	key := &etcd.CDCKey{
 		Tp:           etcd.CDCKeyTypeTaskPosition,
 		CaptureID:    captureID,
 		ChangefeedID: s.ID,
+		KeySpanHash:  keySpahHash,
 	}
 	s.patchAny(key.String(), taskPositionTPI, func(e interface{}) (interface{}, bool, error) {
 		// e == nil means that the key is not exist before this patch

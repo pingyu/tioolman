@@ -179,7 +179,7 @@ func (c *changefeed) tick(ctx cdcContext.Context, state *orchestrator.Changefeed
 		// So we return here.
 		return nil
 	}
-	shouldUpdateState, err := c.scheduler.Tick(c.state, c.schema.AllPhysicalTables(), captures)
+	shouldUpdateState, err := c.scheduler.Tick(ctx, c.state, c.schema.AllPhysicalTables(), captures)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -358,7 +358,7 @@ func (c *changefeed) preflightCheck(captures map[model.CaptureID]*model.CaptureI
 
 	for captureID := range c.state.TaskPositions {
 		if _, exist := captures[captureID]; !exist {
-			c.state.PatchTaskPosition(captureID, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+			c.state.PatchTaskPosition(captureID, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 				return nil, position != nil, nil
 			})
 			ok = false
