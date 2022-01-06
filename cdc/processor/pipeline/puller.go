@@ -49,7 +49,11 @@ func (n *pullerNode) tableSpan(ctx cdcContext.Context) []regionspan.Span {
 	// start table puller
 	config := ctx.ChangefeedVars().Info.Config
 	spans := make([]regionspan.Span, 0, 4)
-	spans = append(spans, regionspan.GetTableSpan(n.tableID))
+	if n.replicaInfo.SpanStart == nil || n.replicaInfo.SpanEnd == nil {
+		spans = append(spans, regionspan.GetTableSpan(n.tableID))
+	} else {
+		spans = append(spans, regionspan.Span{Start: n.replicaInfo.SpanStart, End: n.replicaInfo.SpanEnd})
+	}
 
 	if config.Cyclic.IsEnabled() && n.replicaInfo.MarkTableID != 0 {
 		spans = append(spans, regionspan.GetTableSpan(n.replicaInfo.MarkTableID))
