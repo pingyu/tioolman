@@ -145,7 +145,7 @@ func (s *changefeedSuite) TestPreCheck(c *check.C) {
 	state.PatchTaskStatus(offlineCaputreID, func(status *model.TaskStatus) (*model.TaskStatus, bool, error) {
 		return new(model.TaskStatus), true, nil
 	})
-	state.PatchTaskPosition(offlineCaputreID, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+	state.PatchTaskPosition(offlineCaputreID, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 		return new(model.TaskPosition), true, nil
 	})
 	state.PatchTaskWorkload(offlineCaputreID, func(workload model.TaskWorkload) (model.TaskWorkload, bool, error) {

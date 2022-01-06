@@ -15,7 +15,6 @@ package etcd
 
 import (
 	"log"
-	"strconv"
 	"strings"
 
 	cerror "github.com/pingcap/ticdc/pkg/errors"
@@ -80,11 +79,10 @@ type CDCKey struct {
 	ChangefeedID string
 	CaptureID    string
 	OwnerLeaseID string
-	KeySpanHash  uint64
 }
 
 // Parse parses the given etcd key
-func (k *CDCKey) Parse(key string) (err error) {
+func (k *CDCKey) Parse(key string) error {
 	if !strings.HasPrefix(key, EtcdKeyBase) {
 		return cerror.ErrInvalidEtcdKey.GenWithStackByArgs(key)
 	}
@@ -124,18 +122,13 @@ func (k *CDCKey) Parse(key string) (err error) {
 		k.ChangefeedID = splitKey[1]
 		k.OwnerLeaseID = ""
 	case strings.HasPrefix(key, taskPositionKey):
-		splitKey := strings.SplitN(key[len(taskPositionKey)+1:], "/", 3)
-		if len(splitKey) < 2 {
+		splitKey := strings.SplitN(key[len(taskPositionKey)+1:], "/", 2)
+		if len(splitKey) != 2 {
 			return cerror.ErrInvalidEtcdKey.GenWithStackByArgs(key)
 		}
 		k.Tp = CDCKeyTypeTaskPosition
 		k.CaptureID = splitKey[0]
 		k.ChangefeedID = splitKey[1]
-		if len(splitKey) > 2 {
-			if k.KeySpanHash, err = strconv.ParseUint(splitKey[2], 10, 64); err != nil {
-				return cerror.ErrInvalidEtcdKey.GenWithStackByArgs(key)
-			}
-		}
 		k.OwnerLeaseID = ""
 	case strings.HasPrefix(key, taskWorkloadKey):
 		splitKey := strings.SplitN(key[len(taskWorkloadKey)+1:], "/", 2)
@@ -168,9 +161,6 @@ func (k *CDCKey) String() string {
 	case CDCKeyTypeTaskPosition:
 		return EtcdKeyBase + taskPositionKey + "/" + k.CaptureID + "/" + k.ChangefeedID
 	case CDCKeyTypeTaskStatus:
-		if k.KeySpanHash != 0 {
-			return EtcdKeyBase + taskStatusKey + "/" + k.CaptureID + "/" + k.ChangefeedID + "/" + strconv.FormatUint(k.KeySpanHash, 10)
-		}
 		return EtcdKeyBase + taskStatusKey + "/" + k.CaptureID + "/" + k.ChangefeedID
 	case CDCKeyTypeTaskWorkload:
 		return EtcdKeyBase + taskWorkloadKey + "/" + k.CaptureID + "/" + k.ChangefeedID
