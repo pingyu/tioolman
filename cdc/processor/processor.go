@@ -91,6 +91,7 @@ func newProcessor(ctx cdcContext.Context) *processor {
 	advertiseAddr := ctx.GlobalVars().CaptureInfo.AdvertiseAddr
 	p := &processor{
 		tables:        make(map[model.TableID]tablepipeline.TablePipeline),
+		spans:         make(map[model.KeySpanHash]tablepipeline.TablePipeline),
 		errCh:         make(chan error, 1),
 		changefeedID:  changefeedID,
 		captureInfo:   ctx.GlobalVars().CaptureInfo,
@@ -169,9 +170,9 @@ func (p *processor) tick(ctx cdcContext.Context, state *orchestrator.ChangefeedR
 	if err := p.lazyInit(ctx); err != nil {
 		return nil, errors.Trace(err)
 	}
-	if err := p.handleTableOperation(ctx); err != nil {
-		return nil, errors.Trace(err)
-	}
+	// if err := p.handleTableOperation(ctx); err != nil {
+	// 	return nil, errors.Trace(err)
+	// }
 	if err := p.handleKeySpanOperation(ctx); err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -728,7 +729,6 @@ func (p *processor) addTable(ctx cdcContext.Context, tableID model.TableID, repl
 	p.tables[tableID] = table
 	return nil
 }
-
 
 func (p *processor) addKeySpan(ctx cdcContext.Context, span regionspan.Span, spanID model.KeySpanHash, replicaInfo *model.TableReplicaInfo) error {
 	if span, ok := p.spans[spanID]; ok {
