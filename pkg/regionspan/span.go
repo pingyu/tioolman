@@ -38,8 +38,10 @@ func (s Span) String() string {
 	return fmt.Sprintf("[%s, %s)", hex.EncodeToString(s.Start), hex.EncodeToString(s.End))
 }
 
+// HASH_SEP ...
 var HASH_SEP = []byte{0x0}
 
+// Hash return spanID
 func (s Span) Hash() uint64 {
 	hasher := murmur3.New64()
 	hasher.Write(s.Start)

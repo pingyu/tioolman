@@ -39,7 +39,7 @@ const (
 type sorterNode struct {
 	sorter sorter.EventSorter
 
-	tableID   model.TableID
+	spanID    model.KeySpanHash
 	tableName string // quoted schema and table, used in metircs only
 
 	// for per-table flow control
@@ -54,13 +54,11 @@ type sorterNode struct {
 	resolvedTs model.Ts
 }
 
-func newSorterNode(
-	tableName string, tableID model.TableID, startTs model.Ts,
+func newSorterNode(spanID model.KeySpanHash, startTs model.Ts,
 	flowController tableFlowController, mounter entry.Mounter,
 ) *sorterNode {
 	return &sorterNode{
-		tableName:      tableName,
-		tableID:        tableID,
+		spanID:         spanID,
 		flowController: flowController,
 		mounter:        mounter,
 		resolvedTs:     startTs,
@@ -85,7 +83,7 @@ func (n *sorterNode) Init(ctx pipeline.NodeContext) error {
 		if err != nil {
 			return errors.Trace(err)
 		}
-		sorter, err = unified.NewUnifiedSorter(sortDir, ctx.ChangefeedVars().ID, n.tableName, n.tableID, ctx.GlobalVars().CaptureInfo.AdvertiseAddr)
+		sorter, err = unified.NewUnifiedSorter(sortDir, ctx.ChangefeedVars().ID, n.tableName, int64(n.spanID), ctx.GlobalVars().CaptureInfo.AdvertiseAddr)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -161,7 +159,7 @@ func (n *sorterNode) Init(ctx pipeline.NodeContext) error {
 					if err != nil {
 						if cerror.ErrFlowControllerAborted.Equal(err) {
 							log.Info("flow control cancelled for table",
-								zap.Int64("tableID", n.tableID),
+								zap.Uint64("spandID", n.spanID),
 								zap.String("tableName", n.tableName))
 						} else {
 							ctx.Throw(err)
@@ -206,7 +204,7 @@ func (n *sorterNode) Receive(ctx pipeline.NodeContext) error {
 			oldResolvedTs := atomic.SwapUint64(&n.resolvedTs, resolvedTs)
 			if oldResolvedTs > resolvedTs {
 				log.Panic("resolved ts regression",
-					zap.Int64("tableID", n.tableID),
+					zap.Uint64("spandID", n.spanID),
 					zap.Uint64("resolvedTs", resolvedTs),
 					zap.Uint64("oldResolvedTs", oldResolvedTs))
 			}

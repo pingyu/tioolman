@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cdc/model"
+	"github.com/pingcap/ticdc/pkg/regionspan"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
@@ -30,7 +31,7 @@ import (
 type bufferSink struct {
 	Sink
 	checkpointTs uint64
-	buffer       map[model.TableID][]*model.RowChangedEvent
+	buffer       map[model.KeySpanHash][]*model.RowChangedEvent
 	bufferMu     sync.Mutex
 	flushTsChan  chan uint64
 	drawbackChan chan drawbackMsg
@@ -46,7 +47,7 @@ func newBufferSink(
 	sink := &bufferSink{
 		Sink: backendSink,
 		// buffer shares the same flow control with table sink
-		buffer:       make(map[model.TableID][]*model.RowChangedEvent),
+		buffer:       make(map[model.KeySpanHash][]*model.RowChangedEvent),
 		checkpointTs: checkpointTs,
 		flushTsChan:  make(chan uint64, 128),
 		drawbackChan: drawbackChan,
@@ -78,13 +79,13 @@ func (b *bufferSink) run(ctx context.Context, errCh chan error) {
 			return
 		case drawback := <-b.drawbackChan:
 			b.bufferMu.Lock()
-			delete(b.buffer, drawback.tableID)
+			delete(b.buffer, drawback.spanID)
 			b.bufferMu.Unlock()
 			close(drawback.callback)
 		case resolvedTs := <-b.flushTsChan:
 			b.bufferMu.Lock()
 			// find all rows before resolvedTs and emit to backend sink
-			for tableID, rows := range b.buffer {
+			for spanID, rows := range b.buffer {
 				i := sort.Search(len(rows), func(i int) bool {
 					return rows[i].CommitTs > resolvedTs
 				})
@@ -104,7 +105,7 @@ func (b *bufferSink) run(ctx context.Context, errCh chan error) {
 
 				// put remaining rows back to buffer
 				// append to a new, fixed slice to avoid lazy GC
-				b.buffer[tableID] = append(make([]*model.RowChangedEvent, 0, len(rows[i:])), rows[i:]...)
+				b.buffer[spanID] = append(make([]*model.RowChangedEvent, 0, len(rows[i:])), rows[i:]...)
 			}
 			b.bufferMu.Unlock()
 
@@ -139,8 +140,11 @@ func (b *bufferSink) EmitRowChangedEvents(ctx context.Context, rows ...*model.Ro
 			return nil
 		}
 		tableID := rows[0].Table.TableID
+		span := regionspan.GetTableSpan(tableID)
+		spanID := span.Hash()
+
 		b.bufferMu.Lock()
-		b.buffer[tableID] = append(b.buffer[tableID], rows...)
+		b.buffer[spanID] = append(b.buffer[spanID], rows...)
 		b.bufferMu.Unlock()
 	}
 	return nil

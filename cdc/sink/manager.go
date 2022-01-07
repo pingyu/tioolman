@@ -37,6 +37,7 @@ type Manager struct {
 	backendSink  Sink
 	checkpointTs model.Ts
 	tableSinks   map[model.TableID]*tableSink
+	spanSinks    map[model.KeySpanHash]*tableSink
 	tableSinksMu sync.Mutex
 
 	flushMu  sync.Mutex
@@ -81,6 +82,24 @@ func (m *Manager) CreateTableSink(tableID model.TableID, checkpointTs model.Ts, 
 		redoManager: redoManager,
 	}
 	m.tableSinks[tableID] = sink
+	return sink
+}
+
+// CreateSpanSink creates a span sink
+func (m *Manager) CreateSpanSink(spanID model.KeySpanHash, checkpointTs model.Ts, redoManager redo.LogManager) Sink {
+	m.tableSinksMu.Lock()
+	defer m.tableSinksMu.Unlock()
+	if _, exist := m.spanSinks[spanID]; exist {
+		log.Panic("the table sink already exists", zap.Uint64("spanID", uint64(spanID)))
+	}
+	sink := &tableSink{
+		spanID:      spanID,
+		manager:     m,
+		buffer:      make([]*model.RowChangedEvent, 0, 128),
+		emittedTs:   checkpointTs,
+		redoManager: redoManager,
+	}
+	m.spanSinks[spanID] = sink
 	return sink
 }
 
@@ -130,15 +149,15 @@ func (m *Manager) flushBackendSink(ctx context.Context) (model.Ts, error) {
 	return checkpointTs, nil
 }
 
-func (m *Manager) destroyTableSink(ctx context.Context, tableID model.TableID) error {
+func (m *Manager) destroyTableSink(ctx context.Context, spanID model.KeySpanHash) error {
 	m.tableSinksMu.Lock()
-	delete(m.tableSinks, tableID)
+	delete(m.spanSinks, spanID)
 	m.tableSinksMu.Unlock()
 	callback := make(chan struct{})
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case m.drawbackChan <- drawbackMsg{tableID: tableID, callback: callback}:
+	case m.drawbackChan <- drawbackMsg{spanID: spanID, callback: callback}:
 	}
 	select {
 	case <-ctx.Done():
@@ -154,5 +173,6 @@ func (m *Manager) getCheckpointTs() uint64 {
 
 type drawbackMsg struct {
 	tableID  model.TableID
+	spanID   model.KeySpanHash
 	callback chan struct{}
 }
