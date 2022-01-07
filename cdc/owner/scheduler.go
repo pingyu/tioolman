@@ -94,7 +94,7 @@ func (s *scheduler) Tick(ctx cdcContext.Context, state *orchestrator.ChangefeedR
 	// only if the pending job list is empty and no table is being rebalanced or moved,
 	// can the global resolved ts and checkpoint ts be updated
 	shouldUpdateState = len(pendingJob) == 0
-	shouldUpdateState = s.rebalance() && shouldUpdateState
+	shouldUpdateState = s.rebalance(ctx) && shouldUpdateState
 	shouldUpdateStateInMoveTable, err := s.handleMoveTableJob()
 	if err != nil {
 		return false, errors.Trace(err)
@@ -368,13 +368,14 @@ func (s *scheduler) cleanUpFinishedOperations() {
 	}
 }
 
-func (s *scheduler) rebalance() (shouldUpdateState bool) {
+func (s *scheduler) rebalance(ctx cdcContext.Context) (shouldUpdateState bool) {
 	if !s.shouldRebalance() {
 		// if no table is rebalanced, we can update the resolved ts and checkpoint ts
 		return true
 	}
 	// we only support rebalance by table number for now
-	return s.rebalanceByTableNum()
+	//return s.rebalanceByTableNum()
+	return s.rebalanceByRegionNum(ctx)
 }
 
 func (s *scheduler) shouldRebalance() bool {
@@ -572,15 +573,20 @@ func GetRegionsByTableID(ctx context.Context, tableID model.TableID, pd pd.Clien
 	end := tableSpan.End
 	var regions []*tikv.Region
 	for {
-		batchRegions, err := regionCache.BatchLoadRegionsWithKeyRange(bo, start, end, tikvRequestMaxBackoff)
+		batchRegions, err := regionCache.BatchLoadRegionsWithKeyRange(bo, start, end, limit)
+		log.Info("get table regions", zap.Stringer("span",regionspan.Span{start, end}))
+		log.Info("batch region", zap.Stringer("region span",regionspan.Span{
+			batchRegions[0].GetMeta().StartKey,
+			batchRegions[0].GetMeta().EndKey}))
 		if err != nil {
 			return nil, cerror.WrapError(cerror.ErrPDBatchLoadRegions, err)
 		}
 		regions = append(regions, batchRegions...)
-		if limit > len(batchRegions) {
+		start = batchRegions[len(batchRegions)-1].EndKey()
+
+		if regionspan.EndCompare(start, end) >= 0 {
 			break
 		}
-		start = batchRegions[len(batchRegions)-1].EndKey()
 	}
 
 	return regions, nil
