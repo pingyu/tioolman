@@ -60,6 +60,7 @@ func NewManager(
 		backendSink:               newBufferSink(ctx, backendSink, errCh, checkpointTs, drawbackChan),
 		checkpointTs:              checkpointTs,
 		tableSinks:                make(map[model.TableID]*tableSink),
+		spanSinks:                 make(map[model.KeySpanHash]*tableSink),
 		drawbackChan:              drawbackChan,
 		captureAddr:               captureAddr,
 		changefeedID:              changefeedID,
