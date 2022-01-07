@@ -555,10 +555,9 @@ func (s *scheduler) divideRegionsByCaptureNum(
 			Start: start,
 			End:   end,
 		}
+		log.Info("divide result", zap.String("capture id", captureID),zap.Stringer("span", capture2Span[captureID]))
 		regionIdx = nextIdx
 	}
-	log.Info("divide result",
-		zap.Any("capture2Span", capture2Span))
 	return capture2Span
 }
 
