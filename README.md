@@ -56,15 +56,17 @@ TiDB sink 还有以下优点：
 ### 5. 其他模块的调整
 
 #### 5.1 Owner
-根据调度算法生成 Key Range Task
-根据 Key Range 收集并汇总 table 粒度的 Metrics
+* 根据调度算法生成 Key Range Task。一个 Changefeed 的 Task 数量与 Capture 数量相等，（参考 Region 分布）平均分配到所有 Capture
+* 根据 Key Range 收集并汇总 Changefeed 粒度的 Metrics
 
 #### 5.2 Capture
-接收 Key Range Task 并拉起 Processor
+* 接收 Key Range Task 并拉起 Processor
 
 #### 5.3 Processor
-处理 Key Range Task
-processor.addTable 需要修改
+* 处理 Key Range Task
+* 一个 Processor 处理一个 Task，即`一个Changefeed`在`一个Capture`上的`一个或多个Key Range`
+* processor.addTable 需要增加相应的 addKeySpan 版本
+* processor.handlePosition 处理 KeySpans 的 position
 
 #### 5.4 Puller
 暂无
