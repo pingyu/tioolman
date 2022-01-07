@@ -14,6 +14,12 @@
 package owner
 
 import (
+	"bytes"
+	"context"
+	cdcContext "github.com/pingcap/ticdc/pkg/context"
+	"github.com/pingcap/ticdc/pkg/regionspan"
+	"github.com/tikv/client-go/v2/tikv"
+	pd "github.com/tikv/pd/client"
 	"math"
 
 	"github.com/pingcap/errors"
@@ -39,6 +45,8 @@ type schedulerJob struct {
 	// if the operation is an add operation, boundaryTs is start ts
 	BoundaryTs    uint64
 	TargetCapture model.CaptureID
+
+	Span regionspan.Span
 }
 
 type moveTableJob struct {
@@ -66,7 +74,7 @@ func newScheduler() *scheduler {
 // Tick is the main function of scheduler. It dispatches tables to captures and handles move-table and rebalance events.
 // Tick returns a bool representing whether the changefeed's state can be updated in this tick.
 // The state can be updated only if all the tables which should be listened to have been dispatched to captures and no operations have been sent to captures in this tick.
-func (s *scheduler) Tick(state *orchestrator.ChangefeedReactorState, currentTables []model.TableID, captures map[model.CaptureID]*model.CaptureInfo) (shouldUpdateState bool, err error) {
+func (s *scheduler) Tick(ctx cdcContext.Context, state *orchestrator.ChangefeedReactorState, currentTables []model.TableID, captures map[model.CaptureID]*model.CaptureInfo) (shouldUpdateState bool, err error) {
 	s.state = state
 	s.currentTables = currentTables
 	s.captures = captures
@@ -76,6 +84,7 @@ func (s *scheduler) Tick(state *orchestrator.ChangefeedReactorState, currentTabl
 	if err != nil {
 		return false, errors.Trace(err)
 	}
+	pendingJob = s.splitPendingJobsToKeySpans(ctx, pendingJob)
 	s.dispatchToTargetCaptures(pendingJob)
 	if len(pendingJob) != 0 {
 		log.Debug("scheduler:generated pending job to be executed", zap.Any("pendingJob", pendingJob))
@@ -159,6 +168,15 @@ func (s *scheduler) table2CaptureIndex() (map[model.TableID]model.CaptureID, err
 			table2CaptureIndex[tableID] = captureID
 		}
 	}
+
+	for captureID, taskStatus := range s.state.TaskStatuses {
+		for _, replica := range taskStatus.KeySpans {
+			table2CaptureIndex[replica.TableID] = captureID // Note a table will be owned by multiple cature
+		}
+		for _, oper := range taskStatus.KeySpanOperation {
+			table2CaptureIndex[oper.TableID] = captureID
+		}
+	}
 	return table2CaptureIndex, nil
 }
 
@@ -166,6 +184,7 @@ func (s *scheduler) table2CaptureIndex() (map[model.TableID]model.CaptureID, err
 // If the TargetCapture of a job is not set, it chooses a capture with the minimum workload(minimum number of tables)
 // and sets the TargetCapture to the capture.
 func (s *scheduler) dispatchToTargetCaptures(pendingJobs []*schedulerJob) {
+	// TODO(tiool): workload for key spans
 	workloads := make(map[model.CaptureID]uint64)
 
 	for captureID := range s.captures {
@@ -226,6 +245,33 @@ func (s *scheduler) dispatchToTargetCaptures(pendingJobs []*schedulerJob) {
 	}
 }
 
+func (s *scheduler) splitPendingJobsToKeySpans(ctx cdcContext.Context, pendingJobs []*schedulerJob) []*schedulerJob {
+	// TODO(tiool): real scheduler algorithm
+	pdClient := ctx.GlobalVars().PDClient
+	newJobs := make([]*schedulerJob, 0, len(pendingJobs))
+	for _, job := range pendingJobs {
+		tableID := job.TableID
+		regions, _ := GetRegionsByTableID(context.Background(), tableID, pdClient)
+		tableSpan := regionspan.GetTableSpan(tableID)
+		capture2Span := s.divideRegionsByCaptureNum(regions, tableSpan)
+		for captureID, span := range capture2Span {
+			if job.Tp == schedulerJobTypeAddTable {
+				newJobs = append(newJobs, &schedulerJob{
+					Tp:            job.Tp,
+					TableID:       job.TableID,
+					BoundaryTs:    job.BoundaryTs,
+					Span:          regionspan.Span(span),
+					TargetCapture: captureID,
+				})
+			} else {
+				newJobs = append(newJobs, job) // TODO(tiool): delete table job
+			}
+
+		}
+	}
+	return newJobs
+}
+
 // syncTablesWithCurrentTables iterates all current tables to check whether it should be listened or not.
 // this function will return schedulerJob to make sure all tables will be listened.
 func (s *scheduler) syncTablesWithCurrentTables() ([]*schedulerJob, error) {
@@ -280,6 +326,13 @@ func (s *scheduler) handleJobs(jobs []*schedulerJob) {
 					StartTs:     job.BoundaryTs,
 					MarkTableID: 0, // mark table ID will be set in processors
 				}, job.BoundaryTs)
+				status.AddKeySpan(job.Span, &model.TableReplicaInfo{
+					StartTs:     job.BoundaryTs,
+					MarkTableID: 0,
+					TableID:     job.TableID,
+					SpanStart:   job.Span.Start,
+					SpanEnd:     job.Span.End,
+				}, job.BoundaryTs)
 			case schedulerJobTypeRemoveTable:
 				failpoint.Inject("OwnerRemoveTableError", func() {
 					// just skip removing this table
@@ -290,6 +343,7 @@ func (s *scheduler) handleJobs(jobs []*schedulerJob) {
 					return status, false, nil
 				}
 				status.RemoveTable(job.TableID, job.BoundaryTs, false)
+				// TODO(tiool): remove table
 			default:
 				log.Panic("Unreachable, please report a bug", zap.Any("job", job))
 			}
@@ -385,4 +439,149 @@ func (s *scheduler) rebalanceByTableNum() (shouldUpdateState bool) {
 		}
 	}
 	return
+}
+
+func (s *scheduler) rebalanceByRegionNum(ctx cdcContext.Context) (shouldUpdateState bool) {
+	totalTableNum := len(s.currentTables)
+	captureNum := len(s.captures)
+	shouldUpdateState = true
+	pdClient := ctx.GlobalVars().PDClient
+
+	log.Info("Start rebalancing",
+		zap.String("changefeed", s.state.ID),
+		zap.Int("table-num", totalTableNum),
+		zap.Int("capture-num", captureNum),
+	)
+
+	for _, tableID := range s.currentTables {
+		log.Info("currentTables", zap.Int64("tableID", tableID))
+		tableID := tableID
+		regions, _ := GetRegionsByTableID(context.Background(), tableID, pdClient)
+		tableSpan := regionspan.GetTableSpan(tableID)
+		capture2Span := s.divideRegionsByCaptureNum(regions, tableSpan)
+		globalCheckpointTs := s.state.Status.CheckpointTs
+
+		for captureID, taskStatus := range s.state.TaskStatuses {
+			if span, exist := capture2Span[captureID]; exist {
+				if taskStatus.Tables == nil {
+					taskStatus.Tables = make(map[model.TableID]*model.TableReplicaInfo)
+				}
+				if taskStatus.Tables[tableID] != nil &&
+					bytes.Equal(span.Start, taskStatus.Tables[tableID].SpanStart) &&
+					bytes.Equal(span.End, taskStatus.Tables[tableID].SpanEnd) {
+					shouldUpdateState = false
+					continue
+				}
+				taskStatus.Tables[tableID] = &model.TableReplicaInfo{
+					SpanStart: span.Start,
+					SpanEnd:   span.End,
+					StartTs:   globalCheckpointTs,
+				}
+				log.Info("rebalance",
+					zap.String("capture-id", captureID),
+					zap.Int64("table-id", tableID),
+					zap.String("span", span.String()))
+			} else if _, ok := taskStatus.Tables[tableID]; ok {
+				// if cpature not allocate span, remove this table
+				s.state.PatchTaskStatus(captureID, func(status *model.TaskStatus) (*model.TaskStatus, bool, error) {
+					if status == nil {
+						// the capture may be down, just skip remove this table
+						return status, false, nil
+					}
+					if status.Operation != nil && status.Operation[tableID] != nil {
+						// skip remove this table to avoid the remove operation created by rebalance function to influence the operation created by other function
+						return status, false, nil
+					}
+					status.RemoveTable(tableID, s.state.Status.CheckpointTs, false)
+					log.Info("Rebalance: Move table",
+						zap.Int64("table-id", tableID),
+						zap.String("capture", captureID),
+						zap.String("changefeed-id", s.state.ID))
+					return status, true, nil
+				})
+			}
+
+		}
+	}
+
+	for captureID, _ := range s.state.TaskStatuses {
+		s.state.PatchTaskStatus(captureID, func(status *model.TaskStatus) (*model.TaskStatus, bool, error) {
+			if status == nil {
+				// the capture may be down, just skip remove this table
+				return status, false, nil
+			}
+			return status, true, nil
+		})
+
+	}
+	return
+}
+
+func (s *scheduler) divideRegionsByCaptureNum(
+	regions []*tikv.Region,
+	tableSpan regionspan.Span) map[model.CaptureID]regionspan.ComparableSpan {
+	regionNum := len(regions)
+	captureNum := len(s.captures)
+	capture2Span := make(map[model.CaptureID]regionspan.ComparableSpan)
+	upperLimitPerCapture := int(math.Ceil(float64(regionNum) / float64(captureNum)))
+
+	log.Info("divide regions to captures",
+		zap.Int("region num", regionNum),
+		zap.Int("capture num", captureNum),
+	)
+	var start, end []byte
+
+	regionIdx := 0
+	var nextIdx int
+	for captureID := range s.captures {
+		if regionIdx >= regionNum {
+			break
+		}
+		nextIdx = regionIdx + upperLimitPerCapture
+
+		if regionIdx == 0 {
+			start = tableSpan.Start
+		} else {
+			start = regions[regionIdx].StartKey()
+		}
+		if nextIdx >= regionNum {
+			end = tableSpan.End
+		} else {
+			end = regions[nextIdx].StartKey()
+		}
+
+		capture2Span[captureID] = regionspan.ComparableSpan{
+			Start: start,
+			End:   end,
+		}
+		regionIdx = nextIdx
+	}
+	log.Info("divide result",
+		zap.Any("capture2Span", capture2Span))
+	return capture2Span
+}
+
+func GetRegionsByTableID(ctx context.Context, tableID model.TableID, pd pd.Client) ([]*tikv.Region, error) {
+	limit := 1000
+	tikvRequestMaxBackoff := 20000 // Maximum total sleep time(in ms)
+	tableSpan := regionspan.GetTableSpan(tableID)
+	bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
+
+	regionCache := tikv.NewRegionCache(pd)
+	start := tableSpan.Start
+	end := tableSpan.End
+	var regions []*tikv.Region
+	for {
+		batchRegions, err := regionCache.BatchLoadRegionsWithKeyRange(bo, start, end, tikvRequestMaxBackoff)
+		if err != nil {
+			return nil, cerror.WrapError(cerror.ErrPDBatchLoadRegions, err)
+		}
+		regions = append(regions, batchRegions...)
+		if limit > len(batchRegions) {
+			break
+		}
+		start = batchRegions[len(batchRegions)-1].EndKey()
+	}
+
+	return regions, nil
 }

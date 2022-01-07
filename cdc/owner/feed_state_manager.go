@@ -231,7 +231,7 @@ func (m *feedStateManager) cleanUpInfos() {
 		})
 	}
 	for captureID := range m.state.TaskPositions {
-		m.state.PatchTaskPosition(captureID, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+		m.state.PatchTaskPosition(captureID, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 			return nil, position != nil, nil
 		})
 	}
@@ -251,7 +251,7 @@ func (m *feedStateManager) errorsReportedByProcessors() []*model.RunningError {
 			}
 			runningErrors[position.Error.Code] = position.Error
 			log.Error("processor report an error", zap.String("changefeedID", m.state.ID), zap.String("captureID", captureID), zap.Any("error", position.Error))
-			m.state.PatchTaskPosition(captureID, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+			m.state.PatchTaskPosition(captureID, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 				if position == nil {
 					return nil, false, nil
 				}

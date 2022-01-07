@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/regionspan"
 	"go.uber.org/zap"
 )
 
@@ -165,6 +166,10 @@ type TableOperation struct {
 	// if the operation is a add operation, BoundaryTs is start ts
 	BoundaryTs uint64 `json:"boundary_ts"`
 	Status     uint64 `json:"status,omitempty"`
+
+	TableID   TableID `json:"table-id"`
+	SpanStart []byte  `json:"span-start"`
+	SpanEnd   []byte  `json:"span-end"`
 }
 
 // TableProcessed returns whether the table has been processed by processor
@@ -216,6 +221,10 @@ func (w *TaskWorkload) Marshal() (string, error) {
 type TableReplicaInfo struct {
 	StartTs     Ts      `json:"start-ts"`
 	MarkTableID TableID `json:"mark-table-id"`
+
+	TableID   TableID `json:"table-id"`
+	SpanStart []byte  `json:"span-start"`
+	SpanEnd   []byte  `json:"span-end"`
 }
 
 // Clone clones a TableReplicaInfo
@@ -236,6 +245,9 @@ type TaskStatus struct {
 	ModRevision  int64                         `json:"-"`
 	// true means Operation record has been changed
 	Dirty bool `json:"-"`
+
+	KeySpans         map[KeySpanHash]*TableReplicaInfo `json:"key-spans"`
+	KeySpanOperation map[KeySpanHash]*TableOperation   `json:"key-span-operation"`
 }
 
 // String implements fmt.Stringer interface.
@@ -287,6 +299,31 @@ func (ts *TaskStatus) AddTable(id TableID, table *TableReplicaInfo, boundaryTs T
 		Delete:     false,
 		BoundaryTs: boundaryTs,
 		Status:     OperDispatched,
+	}
+}
+
+// AddKeySpan add the key span in KeySpanInfos and add a add key span operation.
+func (ts *TaskStatus) AddKeySpan(span regionspan.Span, info *TableReplicaInfo, boundaryTs Ts) {
+	hash := KeySpanHash(span.Hash())
+	if ts.KeySpans == nil {
+		ts.KeySpans = make(map[KeySpanHash]*TableReplicaInfo)
+	}
+	_, exist := ts.KeySpans[hash]
+	if exist {
+		return
+	}
+	ts.KeySpans[hash] = info
+	log.Info("add a key span", zap.Any("span", span), zap.Uint64("hash", hash), zap.Int64("tableId", info.TableID), zap.Uint64("boundaryTs", boundaryTs))
+	if ts.KeySpanOperation == nil {
+		ts.KeySpanOperation = make(map[KeySpanHash]*TableOperation)
+	}
+	ts.KeySpanOperation[hash] = &TableOperation{
+		Delete:     false,
+		BoundaryTs: boundaryTs,
+		Status:     OperDispatched,
+		TableID:    info.TableID,
+		SpanStart:  span.Start,
+		SpanEnd:    span.End,
 	}
 }
 
