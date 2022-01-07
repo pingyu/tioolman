@@ -401,13 +401,13 @@ func (s *stateSuite) TestPatchTaskPosition(c *check.C) {
 	stateTester := NewReactorStateTester(c, state, nil)
 	captureID1 := "capture1"
 	captureID2 := "capture2"
-	state.PatchTaskPosition(captureID1, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+	state.PatchTaskPosition(captureID1, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 		c.Assert(position, check.IsNil)
 		return &model.TaskPosition{
 			CheckPointTs: 1,
 		}, true, nil
 	})
-	state.PatchTaskPosition(captureID2, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+	state.PatchTaskPosition(captureID2, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 		c.Assert(position, check.IsNil)
 		return &model.TaskPosition{
 			CheckPointTs: 2,
@@ -422,11 +422,11 @@ func (s *stateSuite) TestPatchTaskPosition(c *check.C) {
 			CheckPointTs: 2,
 		},
 	})
-	state.PatchTaskPosition(captureID1, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+	state.PatchTaskPosition(captureID1, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 		position.CheckPointTs = 3
 		return position, true, nil
 	})
-	state.PatchTaskPosition(captureID2, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+	state.PatchTaskPosition(captureID2, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 		position.ResolvedTs = 2
 		return position, true, nil
 	})
@@ -440,13 +440,13 @@ func (s *stateSuite) TestPatchTaskPosition(c *check.C) {
 			ResolvedTs:   2,
 		},
 	})
-	state.PatchTaskPosition(captureID1, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+	state.PatchTaskPosition(captureID1, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 		return nil, false, nil
 	})
-	state.PatchTaskPosition(captureID2, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+	state.PatchTaskPosition(captureID2, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 		return nil, true, nil
 	})
-	state.PatchTaskPosition(captureID1, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+	state.PatchTaskPosition(captureID1, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 		position.Count = 6
 		return position, true, nil
 	})

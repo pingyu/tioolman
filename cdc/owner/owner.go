@@ -236,7 +236,7 @@ func (o *Owner) cleanUpChangefeed(state *orchestrator.ChangefeedReactorState) {
 		})
 	}
 	for captureID := range state.TaskPositions {
-		state.PatchTaskPosition(captureID, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+		state.PatchTaskPosition(captureID, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 			return nil, position != nil, nil
 		})
 	}

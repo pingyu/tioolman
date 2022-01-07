@@ -146,7 +146,7 @@ func (s *feedStateManagerSuite) TestCleanUpInfos(c *check.C) {
 	state.PatchTaskStatus(ctx.GlobalVars().CaptureInfo.ID, func(status *model.TaskStatus) (*model.TaskStatus, bool, error) {
 		return &model.TaskStatus{}, true, nil
 	})
-	state.PatchTaskPosition(ctx.GlobalVars().CaptureInfo.ID, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+	state.PatchTaskPosition(ctx.GlobalVars().CaptureInfo.ID, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 		return &model.TaskPosition{}, true, nil
 	})
 	state.PatchTaskWorkload(ctx.GlobalVars().CaptureInfo.ID, func(workload model.TaskWorkload) (model.TaskWorkload, bool, error) {
@@ -189,7 +189,7 @@ func (s *feedStateManagerSuite) TestHandleError(c *check.C) {
 	state.PatchTaskStatus(ctx.GlobalVars().CaptureInfo.ID, func(status *model.TaskStatus) (*model.TaskStatus, bool, error) {
 		return &model.TaskStatus{}, true, nil
 	})
-	state.PatchTaskPosition(ctx.GlobalVars().CaptureInfo.ID, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+	state.PatchTaskPosition(ctx.GlobalVars().CaptureInfo.ID, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 		return &model.TaskPosition{Error: &model.RunningError{
 			Addr:    ctx.GlobalVars().CaptureInfo.AdvertiseAddr,
 			Code:    "[CDC:ErrEtcdSessionDone]",
@@ -208,7 +208,7 @@ func (s *feedStateManagerSuite) TestHandleError(c *check.C) {
 
 	// throw error more than history threshold to turn feed state into error
 	for i := 0; i < model.ErrorHistoryThreshold; i++ {
-		state.PatchTaskPosition(ctx.GlobalVars().CaptureInfo.ID, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+		state.PatchTaskPosition(ctx.GlobalVars().CaptureInfo.ID, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 			return &model.TaskPosition{Error: &model.RunningError{
 				Addr:    ctx.GlobalVars().CaptureInfo.AdvertiseAddr,
 				Code:    "[CDC:ErrEtcdSessionDone]",

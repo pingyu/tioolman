@@ -137,7 +137,7 @@ func (p *processor) Tick(ctx cdcContext.Context, state *orchestrator.ChangefeedR
 	} else {
 		code = string(cerror.ErrProcessorUnknown.RFCCode())
 	}
-	state.PatchTaskPosition(p.captureInfo.ID, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+	state.PatchTaskPosition(p.captureInfo.ID, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 		if position == nil {
 			position = &model.TaskPosition{}
 		}
@@ -209,7 +209,7 @@ func (p *processor) checkPosition() (skipThisTick bool) {
 		log.Warn("position is nil, maybe position info is removed unexpected", zap.Any("state", p.changefeed))
 	}
 	checkpointTs := p.changefeed.Info.GetCheckpointTs(p.changefeed.Status)
-	p.changefeed.PatchTaskPosition(p.captureInfo.ID, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+	p.changefeed.PatchTaskPosition(p.captureInfo.ID, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 		if position == nil {
 			return &model.TaskPosition{
 				CheckPointTs: checkpointTs,
@@ -654,7 +654,7 @@ func (p *processor) handlePosition() {
 	// minResolvedTs and minCheckpointTs may less than global resolved ts and global checkpoint ts when a new table added, the startTs of the new table is less than global checkpoint ts.
 	if minResolvedTs != p.changefeed.TaskPositions[p.captureInfo.ID].ResolvedTs ||
 		minCheckpointTs != p.changefeed.TaskPositions[p.captureInfo.ID].CheckPointTs {
-		p.changefeed.PatchTaskPosition(p.captureInfo.ID, 0, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
+		p.changefeed.PatchTaskPosition(p.captureInfo.ID, func(position *model.TaskPosition) (*model.TaskPosition, bool, error) {
 			failpoint.Inject("ProcessorUpdatePositionDelaying", nil)
 			if position == nil {
 				// when the captureInfo is deleted, the old owner will delete task status, task position, task workload in non-atomic
