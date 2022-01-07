@@ -565,16 +565,16 @@ func (p *processor) handlePosition() {
 	if p.schemaStorage != nil {
 		minResolvedTs = p.schemaStorage.ResolvedTs()
 	}
-	for _, table := range p.tables {
-		ts := table.ResolvedTs()
+	for _, span := range p.spans {
+		ts := span.ResolvedTs()
 		if ts < minResolvedTs {
 			minResolvedTs = ts
 		}
 	}
 
 	minCheckpointTs := minResolvedTs
-	for _, table := range p.tables {
-		ts := table.CheckpointTs()
+	for _, span := range p.spans {
+		ts := span.CheckpointTs()
 		if ts < minCheckpointTs {
 			minCheckpointTs = ts
 		}
