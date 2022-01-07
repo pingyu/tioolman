@@ -94,7 +94,7 @@ func (s *scheduler) Tick(ctx cdcContext.Context, state *orchestrator.ChangefeedR
 	// only if the pending job list is empty and no table is being rebalanced or moved,
 	// can the global resolved ts and checkpoint ts be updated
 	shouldUpdateState = len(pendingJob) == 0
-	shouldUpdateState = s.rebalance() && shouldUpdateState
+	shouldUpdateState = s.rebalance(ctx) && shouldUpdateState
 	shouldUpdateStateInMoveTable, err := s.handleMoveTableJob()
 	if err != nil {
 		return false, errors.Trace(err)
@@ -157,13 +157,13 @@ func (s *scheduler) table2CaptureIndex() (map[model.TableID]model.CaptureID, err
 	for captureID, taskStatus := range s.state.TaskStatuses {
 		for tableID := range taskStatus.Tables {
 			if preCaptureID, exist := table2CaptureIndex[tableID]; exist && preCaptureID != captureID {
-				return nil, cerror.ErrTableListenReplicated.GenWithStackByArgs(tableID, preCaptureID, captureID)
+				continue
 			}
 			table2CaptureIndex[tableID] = captureID
 		}
 		for tableID := range taskStatus.Operation {
 			if preCaptureID, exist := table2CaptureIndex[tableID]; exist && preCaptureID != captureID {
-				return nil, cerror.ErrTableListenReplicated.GenWithStackByArgs(tableID, preCaptureID, captureID)
+				continue
 			}
 			table2CaptureIndex[tableID] = captureID
 		}
@@ -253,7 +253,7 @@ func (s *scheduler) splitPendingJobsToKeySpans(ctx cdcContext.Context, pendingJo
 		tableID := job.TableID
 		regions, _ := GetRegionsByTableID(context.Background(), tableID, pdClient)
 		tableSpan := regionspan.GetTableSpan(tableID)
-		capture2Span := s.divideRegionsByCaptureNum(regions, tableSpan)
+		capture2Span := s.divideRegionsByCaptureNum(regions, regionspan.ToComparableSpan(tableSpan))
 		for captureID, span := range capture2Span {
 			if job.Tp == schedulerJobTypeAddTable {
 				newJobs = append(newJobs, &schedulerJob{
@@ -368,13 +368,14 @@ func (s *scheduler) cleanUpFinishedOperations() {
 	}
 }
 
-func (s *scheduler) rebalance() (shouldUpdateState bool) {
+func (s *scheduler) rebalance(ctx cdcContext.Context) (shouldUpdateState bool) {
 	if !s.shouldRebalance() {
 		// if no table is rebalanced, we can update the resolved ts and checkpoint ts
 		return true
 	}
 	// we only support rebalance by table number for now
-	return s.rebalanceByTableNum()
+	//return s.rebalanceByTableNum()
+	return s.rebalanceByRegionNum(ctx)
 }
 
 func (s *scheduler) shouldRebalance() bool {
@@ -458,7 +459,7 @@ func (s *scheduler) rebalanceByRegionNum(ctx cdcContext.Context) (shouldUpdateSt
 		tableID := tableID
 		regions, _ := GetRegionsByTableID(context.Background(), tableID, pdClient)
 		tableSpan := regionspan.GetTableSpan(tableID)
-		capture2Span := s.divideRegionsByCaptureNum(regions, tableSpan)
+		capture2Span := s.divideRegionsByCaptureNum(regions, regionspan.ToComparableSpan(tableSpan))
 		globalCheckpointTs := s.state.Status.CheckpointTs
 
 		for captureID, taskStatus := range s.state.TaskStatuses {
@@ -519,7 +520,7 @@ func (s *scheduler) rebalanceByRegionNum(ctx cdcContext.Context) (shouldUpdateSt
 
 func (s *scheduler) divideRegionsByCaptureNum(
 	regions []*tikv.Region,
-	tableSpan regionspan.Span) map[model.CaptureID]regionspan.ComparableSpan {
+	tableSpan regionspan.ComparableSpan) map[model.CaptureID]regionspan.ComparableSpan {
 	regionNum := len(regions)
 	captureNum := len(s.captures)
 	capture2Span := make(map[model.CaptureID]regionspan.ComparableSpan)
@@ -565,22 +566,28 @@ func GetRegionsByTableID(ctx context.Context, tableID model.TableID, pd pd.Clien
 	limit := 1000
 	tikvRequestMaxBackoff := 20000 // Maximum total sleep time(in ms)
 	tableSpan := regionspan.GetTableSpan(tableID)
+	totalSpan := regionspan.ToComparableSpan(tableSpan)
 	bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 
 	regionCache := tikv.NewRegionCache(pd)
-	start := tableSpan.Start
-	end := tableSpan.End
+	start := totalSpan.Start
+	end := totalSpan.End
 	var regions []*tikv.Region
 	for {
-		batchRegions, err := regionCache.BatchLoadRegionsWithKeyRange(bo, start, end, tikvRequestMaxBackoff)
+		batchRegions, err := regionCache.BatchLoadRegionsWithKeyRange(bo, start, end, limit)
+		log.Info("get table regions", zap.Stringer("span",regionspan.Span{start, end}))
+		log.Info("batch region", zap.Stringer("region span",regionspan.Span{
+			batchRegions[0].GetMeta().StartKey,
+			batchRegions[0].GetMeta().EndKey}))
 		if err != nil {
 			return nil, cerror.WrapError(cerror.ErrPDBatchLoadRegions, err)
 		}
 		regions = append(regions, batchRegions...)
-		if limit > len(batchRegions) {
+		start = batchRegions[len(batchRegions)-1].EndKey()
+
+		if regionspan.EndCompare(start, end) >= 0 {
 			break
 		}
-		start = batchRegions[len(batchRegions)-1].EndKey()
 	}
 
 	return regions, nil
