@@ -73,6 +73,7 @@ func NewPuller(
 	kvStorage tidbkv.Storage,
 	checkpointTs uint64,
 	spans []regionspan.Span,
+	isDDL bool,
 	enableOldValue bool,
 ) Puller {
 	tikvStorage, ok := kvStorage.(tikv.Storage)
@@ -80,8 +81,14 @@ func NewPuller(
 		log.Panic("can't create puller for non-tikv storage")
 	}
 	comparableSpans := make([]regionspan.ComparableSpan, len(spans))
-	for i := range spans {
-		comparableSpans[i] = regionspan.ToComparableSpan(spans[i])
+	if isDDL {
+		for i := range spans {
+			comparableSpans[i] = regionspan.ToComparableSpan(spans[i])
+		}
+	} else {
+		for i := range spans {
+			comparableSpans[i] = regionspan.ComparableSpan(spans[i])
+		}
 	}
 	// To make puller level resolved ts initialization distinguishable, we set
 	// the initial ts for frontier to 0. Once the puller level resolved ts

@@ -70,7 +70,7 @@ func (n *pullerNode) Init(ctx pipeline.NodeContext) error {
 	// NOTICE: always pull the old value internally
 	// See also: TODO(hi-rustin): add issue link here.
 	plr := puller.NewPuller(ctxC, ctx.GlobalVars().PDClient, ctx.GlobalVars().GrpcPool, ctx.GlobalVars().KVStorage,
-		n.replicaInfo.StartTs, n.tableSpan(ctx), true)
+		n.replicaInfo.StartTs, n.tableSpan(ctx), false, true)
 	n.wg.Go(func() error {
 		ctx.Throw(errors.Trace(plr.Run(ctxC)))
 		return nil

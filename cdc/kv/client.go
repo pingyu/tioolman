@@ -915,6 +915,7 @@ func (s *eventFeedSession) divideAndSendEventFeedToRegions(
 			scanT0 := time.Now()
 			bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 			regions, err = s.regionCache.BatchLoadRegionsWithKeyRange(bo, nextSpan.Start, nextSpan.End, limit)
+			log.Info("ScanRegions", zap.Stringer("span", nextSpan), zap.Int("regions num", len(regions)) )
 			scanRegionsDuration.WithLabelValues(captureAddr).Observe(time.Since(scanT0).Seconds())
 			if err != nil {
 				return cerror.WrapError(cerror.ErrPDBatchLoadRegions, err)

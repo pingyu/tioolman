@@ -299,6 +299,8 @@ func (ts *TaskStatus) AddTable(id TableID, table *TableReplicaInfo, boundaryTs T
 		Delete:     false,
 		BoundaryTs: boundaryTs,
 		Status:     OperDispatched,
+		SpanStart: table.SpanStart,
+		SpanEnd: table.SpanEnd,
 	}
 }
 

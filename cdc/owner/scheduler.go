@@ -325,6 +325,8 @@ func (s *scheduler) handleJobs(jobs []*schedulerJob) {
 				status.AddTable(job.TableID, &model.TableReplicaInfo{
 					StartTs:     job.BoundaryTs,
 					MarkTableID: 0, // mark table ID will be set in processors
+					SpanStart:   job.Span.Start,
+					SpanEnd:     job.Span.End,
 				}, job.BoundaryTs)
 				status.AddKeySpan(job.Span, &model.TableReplicaInfo{
 					StartTs:     job.BoundaryTs,
